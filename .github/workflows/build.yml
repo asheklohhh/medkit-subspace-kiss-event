@@ -19,7 +19,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-
+          
+- name: Set up Gradle 8.8
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.8'
+          
       - name: Find and extract mod sources
         shell: bash
         run: |
