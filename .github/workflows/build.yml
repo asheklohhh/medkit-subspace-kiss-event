@@ -4,7 +4,11 @@ name: Build Minecraft Mod
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -19,12 +23,13 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          
-- name: Set up Gradle 8.8
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.8'
-          
+
+      - name: Install Gradle 8.8
+        run: |
+          curl -L https://services.gradle.org/distributions/gradle-8.8-bin.zip -o gradle.zip
+          unzip -q gradle.zip -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-8.8/bin" >> "$GITHUB_PATH"
+
       - name: Find and extract mod sources
         shell: bash
         run: |
@@ -33,9 +38,11 @@ jobs:
           ARCHIVE="$(find . -type f -iname '*.zip' -not -path './.git/*' -print -quit)"
 
           if [ -z "$ARCHIVE" ]; then
-            echo "ZIP archive not found!"
+            echo "ERROR: ZIP archive not found!"
             exit 1
           fi
+
+          echo "Found archive: $ARCHIVE"
 
           mkdir -p extracted
           unzip -q "$ARCHIVE" -d extracted
@@ -43,7 +50,7 @@ jobs:
           BUILD_FILE="$(find extracted -type f -name build.gradle -print -quit)"
 
           if [ -z "$BUILD_FILE" ]; then
-            echo "build.gradle not found!"
+            echo "ERROR: build.gradle not found!"
             exit 1
           fi
 
@@ -55,46 +62,58 @@ jobs:
           import re
 
           p = Path("settings.gradle")
-          if not p.exists():
-              raise SystemExit("settings.gradle not found!")
+          s = p.read_text() if p.exists() else ""
 
-          s = p.read_text()
           repo = "maven { url = 'https://maven.minecraftforge.net' }"
 
-          if repo not in s:
-              pm = re.search(r'pluginManagement\s*\{', s)
+          if "https://maven.minecraftforge.net" not in s:
+              pm = re.search(r'\bpluginManagement\s*\{', s)
 
-              if pm:
-                  r = re.search(r'repositories\s*\{', s[pm.end():])
-                  if r:
-                      pos = pm.end() + r.end()
+              if not pm:
+                  s = (
+                      "pluginManagement {\n"
+                      "    repositories {\n"
+                      "        " + repo + "\n"
+                      "        gradlePluginPortal()\n"
+                      "        mavenCentral()\n"
+                      "    }\n"
+                      "}\n\n" + s
+                  )
+              else:
+                  tail = s[pm.end():]
+                  repos = re.search(r'\brepositories\s*\{', tail)
+
+                  if repos:
+                      pos = pm.end() + repos.end()
                       s = s[:pos] + "\n        " + repo + s[pos:]
                   else:
                       pos = pm.end()
-                      s = s[:pos] + "\n    repositories {\n        " + repo + "\n        gradlePluginPortal()\n        mavenCentral()\n    }\n" + s[pos:]
-              else:
-                  s = "pluginManagement {\n    repositories {\n        " + repo + "\n        gradlePluginPortal()\n        mavenCentral()\n    }\n}\n\n" + s
+                      s = (
+                          s[:pos] +
+                          "\n    repositories {\n        " + repo +
+                          "\n        gradlePluginPortal()\n"
+                          "        mavenCentral()\n    }\n" +
+                          s[pos:]
+                      )
 
           p.write_text(s)
           PY
 
-          if [ -f gradlew ]; then
-            chmod +x gradlew
-            ./gradlew --no-daemon build
-          else
-            gradle --no-daemon build
-          fi
+          gradle --version
+          gradle --no-daemon build
 
           mkdir -p "$GITHUB_WORKSPACE/output"
 
           JAR="$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)"
 
           if [ -z "$JAR" ]; then
-            echo "JAR file not found!"
+            echo "ERROR: No mod JAR was generated!"
             exit 1
           fi
 
           cp "$JAR" "$GITHUB_WORKSPACE/output/"
+
+          echo "SUCCESS: JAR generated!"
 
       - name: Upload mod JAR
         uses: actions/upload-artifact@v4
